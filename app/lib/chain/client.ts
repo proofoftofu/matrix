@@ -240,7 +240,7 @@ async function awaitPairVerifiedEvent(program: Program): Promise<PairVerifiedEve
 }
 
 function deserializeLEToBN(bytes: Uint8Array): anchor.BN {
-  let value = 0n;
+  let value = BigInt(0);
   for (let i = 0; i < bytes.length; i += 1) {
     value |= BigInt(bytes[i]) << BigInt(i * 8);
   }

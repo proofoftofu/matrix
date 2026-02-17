@@ -149,15 +149,15 @@ export async function POST(request: Request) {
         if (!body.sharedSecretB64 || !body.isMatchCipher || !body.nonce) {
           throw new Error("Missing decrypt inputs");
         }
+        if (!Array.isArray(body.isMatchCipher) || !Array.isArray(body.nonce)) {
+          throw new Error("decrypt inputs must be number arrays");
+        }
 
         const sharedSecret = Buffer.from(body.sharedSecretB64, "base64");
         const cipher = new RescueCipher(sharedSecret);
-        const value = cipher.decrypt(
-          [Uint8Array.from(body.isMatchCipher)],
-          Uint8Array.from(body.nonce)
-        )[0];
+        const value = cipher.decrypt([body.isMatchCipher], Uint8Array.from(body.nonce))[0];
 
-        return NextResponse.json({ isMatch: value === 1n });
+        return NextResponse.json({ isMatch: value === BigInt(1) });
       }
 
       default:
