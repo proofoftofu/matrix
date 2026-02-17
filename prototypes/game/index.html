@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cipher Memory Match - Pixel Prototype</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main id="app" aria-label="Cipher Memory Match">
+      <section class="info" aria-live="polite">
+        <header class="topbar">
+          <h1>CIPHER MATCH</h1>
+          <button id="restart" type="button">RST</button>
+        </header>
+        <div id="status">Booting...</div>
+        <div class="stats-row">
+          <span id="timer">90.0s</span>
+          <span id="score">SCORE 0</span>
+          <span id="progress">P 0/8 | T 0 | A 0</span>
+        </div>
+        <div class="hint">ARROWS MOVE | ENTER/SPACE/CLICK FLIP</div>
+      </section>
+
+      <section id="board" aria-label="4 by 4 memory board"></section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
