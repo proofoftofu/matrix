@@ -4,15 +4,15 @@ use arcis::*;
 mod circuits {
     use arcis::*;
 
-    pub struct InputValues {
-        v1: u8,
-        v2: u8,
+    pub struct VerifyPairInput {
+        card_a: u8,
+        card_b: u8,
     }
 
     #[instruction]
-    pub fn add_together(input_ctxt: Enc<Shared, InputValues>) -> Enc<Shared, u16> {
+    pub fn verify_pair(input_ctxt: Enc<Shared, VerifyPairInput>) -> Enc<Shared, u8> {
         let input = input_ctxt.to_arcis();
-        let sum = input.v1 as u16 + input.v2 as u16;
-        input_ctxt.owner.from_arcis(sum)
+        let is_match: u8 = if input.card_a == input.card_b { 1 } else { 0 };
+        input_ctxt.owner.from_arcis(is_match)
     }
 }
