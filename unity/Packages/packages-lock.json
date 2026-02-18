@@ -1,5 +1,15 @@
 {
   "dependencies": {
+    "com.playsolana.psdk": {
+      "version": "https://github.com/playsolana/PlaySolana.Unity-SDK.git",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {
+        "com.unity.inputsystem": "1.1.1",
+        "com.unity.textmeshpro": "2.1.6"
+      },
+      "hash": "d42fcd5b038ff12ded039ad6c21c26926bc6853b"
+    },
     "com.unity.2d.animation": {
       "version": "13.0.4",
       "depth": 0,
@@ -322,6 +332,14 @@
         "com.unity.modules.jsonserialize": "1.0.0"
       },
       "url": "https://packages.unity.com"
+    },
+    "com.unity.textmeshpro": {
+      "version": "5.0.0",
+      "depth": 1,
+      "source": "builtin",
+      "dependencies": {
+        "com.unity.ugui": "2.0.0"
+      }
     },
     "com.unity.timeline": {
       "version": "1.8.10",
