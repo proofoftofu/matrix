@@ -84,6 +84,8 @@ public sealed class MatrixGameRuntime : MonoBehaviour
     private static readonly Color HiddenColor = new Color(0.10f, 0.13f, 0.20f, 1f);
     private static readonly Color CursorColor = new Color(1f, 1f, 1f, 0.35f);
     private static readonly Color MatchedColor = new Color(0.18f, 0.22f, 0.30f, 1f);
+    private static readonly Color PanelColor = new Color(0.05f, 0.08f, 0.13f, 0.95f);
+    private static readonly Color HudCardColor = new Color(0.10f, 0.15f, 0.24f, 0.88f);
 
     private static readonly Color[] PairColors =
     {
@@ -189,53 +191,96 @@ public sealed class MatrixGameRuntime : MonoBehaviour
 
         EnsureEventSystem();
 
-        var root = CreateRect("Root", canvasGo.transform, anchorMin: Vector2.zero, anchorMax: Vector2.one, offsetMin: Vector2.zero, offsetMax: Vector2.zero);
+        var backdrop = CreateRect("Backdrop", canvasGo.transform, anchorMin: Vector2.zero, anchorMax: Vector2.one, offsetMin: Vector2.zero, offsetMax: Vector2.zero);
+        backdrop.gameObject.AddComponent<Image>().color = Color.black;
+
+        var root = CreateRect("Root", canvasGo.transform, anchorMin: Vector2.zero, anchorMax: Vector2.one, offsetMin: new Vector2(10f, 10f), offsetMax: new Vector2(-10f, -10f));
+        root.gameObject.AddComponent<Image>().color = new Color(0.03f, 0.04f, 0.07f, 1f);
 
         var panel = CreateRect("GamePanel", root, anchorMin: Vector2.zero, anchorMax: Vector2.one, offsetMin: Vector2.zero, offsetMax: Vector2.zero);
-        panel.gameObject.AddComponent<Image>().color = new Color(0.07f, 0.09f, 0.14f, 0.92f);
+        panel.gameObject.AddComponent<Image>().color = PanelColor;
 
         panel.gameObject.AddComponent<VerticalLayoutGroup>();
         var panelLayout = panel.GetComponent<VerticalLayoutGroup>();
-        panelLayout.spacing = 2f;
-        panelLayout.padding = new RectOffset(4, 4, 4, 4);
+        panelLayout.spacing = 10f;
+        panelLayout.padding = new RectOffset(18, 18, 14, 14);
         panelLayout.childControlHeight = true;
         panelLayout.childControlWidth = true;
         panelLayout.childForceExpandHeight = false;
 
-        _statusText = CreateText("Status", panel, "...", 14, TextAnchor.MiddleCenter);
-        _progressText = CreateText("Progress", panel, "", 12, TextAnchor.MiddleCenter);
-        _scoreText = CreateText("Score", panel, "", 12, TextAnchor.MiddleCenter);
+        var hudRow = CreateRect("HudRow", panel, anchorMin: new Vector2(0f, 1f), anchorMax: new Vector2(1f, 1f), offsetMin: Vector2.zero, offsetMax: Vector2.zero);
+        hudRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        var hudLayout = hudRow.GetComponent<HorizontalLayoutGroup>();
+        hudLayout.spacing = 8f;
+        hudLayout.padding = new RectOffset(0, 0, 0, 0);
+        hudLayout.childControlHeight = true;
+        hudLayout.childControlWidth = true;
+        hudLayout.childForceExpandHeight = false;
+        hudLayout.childForceExpandWidth = true;
+        var hudRowLayout = hudRow.gameObject.AddComponent<LayoutElement>();
+        hudRowLayout.preferredHeight = 56f;
+        hudRowLayout.minHeight = 52f;
+
+        var statusCard = CreateHudCard(hudRow, "StatusCard");
+        _statusText = CreateText("Status", statusCard, "...", 16, TextAnchor.MiddleCenter);
+        _statusText.resizeTextForBestFit = true;
+        _statusText.resizeTextMinSize = 10;
+        _statusText.resizeTextMaxSize = 16;
+        _statusText.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+        var progressCard = CreateHudCard(hudRow, "ProgressCard");
+        _progressText = CreateText("Progress", progressCard, "", 15, TextAnchor.MiddleCenter);
+
+        var scoreCard = CreateHudCard(hudRow, "ScoreCard");
+        _scoreText = CreateText("Score", scoreCard, "", 15, TextAnchor.MiddleCenter);
 
         _gridRect = CreateRect("Grid", panel, anchorMin: new Vector2(0f, 0f), anchorMax: new Vector2(1f, 1f), offsetMin: Vector2.zero, offsetMax: Vector2.zero);
         var layout = _gridRect.gameObject.AddComponent<LayoutElement>();
         layout.flexibleHeight = 1f;
-        layout.minHeight = 200f;
+        layout.minHeight = 300f;
+
+        var gridBackdrop = _gridRect.gameObject.AddComponent<Image>();
+        gridBackdrop.color = new Color(0.09f, 0.13f, 0.21f, 0.52f);
 
         _grid = _gridRect.gameObject.AddComponent<GridLayoutGroup>();
         _grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
         _grid.constraintCount = GridCols;
-        _grid.spacing = new Vector2(8f, 8f);
+        _grid.spacing = new Vector2(14f, 14f);
         _grid.childAlignment = TextAnchor.MiddleCenter;
         _grid.cellSize = new Vector2(64f, 64f);
+        _grid.padding = new RectOffset(14, 14, 14, 14);
 
         for (var i = 0; i < CardCount; i++)
         {
-            var buttonObj = new GameObject($"Card_{i}", typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline));
+            var buttonObj = new GameObject($"Card_{i}", typeof(RectTransform), typeof(Image), typeof(Button), typeof(Outline), typeof(Shadow));
             buttonObj.transform.SetParent(_gridRect, false);
 
             var image = buttonObj.GetComponent<Image>();
             image.color = HiddenColor;
+            image.type = Image.Type.Sliced;
 
             var outline = buttonObj.GetComponent<Outline>();
             outline.effectColor = new Color(1f, 1f, 1f, 0f);
-            outline.effectDistance = new Vector2(4f, -4f);
+            outline.effectDistance = new Vector2(2f, -2f);
+
+            var shadow = buttonObj.GetComponent<Shadow>();
+            shadow.effectColor = new Color(0f, 0f, 0f, 0.6f);
+            shadow.effectDistance = new Vector2(0f, -4f);
 
             var button = buttonObj.GetComponent<Button>();
+            var colors = button.colors;
+            colors.highlightedColor = new Color(1f, 1f, 1f, 0.14f);
+            colors.pressedColor = new Color(1f, 1f, 1f, 0.2f);
+            colors.selectedColor = new Color(1f, 1f, 1f, 0.14f);
+            colors.fadeDuration = 0.08f;
+            button.colors = colors;
             var index = i;
             button.onClick.AddListener(() => TrySelectCard(index));
 
-            var label = CreateText("Glyph", buttonObj.transform, "?", 56, TextAnchor.MiddleCenter);
+            var label = CreateText("Glyph", buttonObj.transform, "?", 52, TextAnchor.MiddleCenter);
             label.raycastTarget = false;
+            label.fontStyle = FontStyle.Bold;
+            label.color = new Color(0.93f, 0.98f, 1f, 1f);
 
             _cards[index] = new CardView
             {
@@ -365,8 +410,9 @@ public sealed class MatrixGameRuntime : MonoBehaviour
 
     private void RefreshUi()
     {
-        _progressText.text = $"P {_pairsFound}/{PairCount} | T {_turnsUsed} | A {_actions}";
-        _scoreText.text = $"SCORE: {ComputeScore()}";
+        _progressText.text = $"PAIRS {_pairsFound}/{PairCount}   TURNS {_turnsUsed}";
+        _scoreText.text = $"SCORE {ComputeScore()}";
+        var cursorGlow = Mathf.Lerp(0.22f, 0.72f, 0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 4f));
 
         for (var i = 0; i < CardCount; i++)
         {
@@ -383,7 +429,9 @@ public sealed class MatrixGameRuntime : MonoBehaviour
             view.Glyph.text = showFace ? PairGlyphs[card.PairId % PairGlyphs.Length] : "?";
 
             var outline = view.Button.GetComponent<Outline>();
-            outline.effectColor = i == _cursorIndex ? CursorColor : new Color(1f, 1f, 1f, 0f);
+            outline.effectColor = i == _cursorIndex
+                ? new Color(CursorColor.r, CursorColor.g, CursorColor.b, cursorGlow)
+                : new Color(1f, 1f, 1f, 0f);
         }
     }
 
@@ -438,13 +486,31 @@ public sealed class MatrixGameRuntime : MonoBehaviour
         text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         text.fontSize = size;
         text.alignment = alignment;
-        text.color = Color.white;
+        text.color = new Color(0.93f, 0.97f, 1f, 1f);
+        text.fontStyle = FontStyle.Bold;
 
         var layout = go.GetComponent<LayoutElement>();
-        layout.minHeight = size + 8f;
-        layout.preferredHeight = size + 12f;
+        layout.minHeight = size + 10f;
+        layout.preferredHeight = size + 14f;
 
         return text;
+    }
+
+    private static RectTransform CreateHudCard(Transform parent, string name)
+    {
+        var card = CreateRect(name, parent, new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero);
+        var image = card.gameObject.AddComponent<Image>();
+        image.color = HudCardColor;
+
+        var outline = card.gameObject.AddComponent<Outline>();
+        outline.effectColor = new Color(0.72f, 0.86f, 1f, 0.26f);
+        outline.effectDistance = new Vector2(1f, -1f);
+
+        var shadow = card.gameObject.AddComponent<Shadow>();
+        shadow.effectColor = new Color(0f, 0f, 0f, 0.45f);
+        shadow.effectDistance = new Vector2(0f, -2f);
+
+        return card;
     }
 
     private static void EnsureEventSystem()
@@ -480,18 +546,27 @@ public sealed class MatrixGameRuntime : MonoBehaviour
             return;
         }
 
-        var spacingX = _grid.spacing.x;
-        var spacingY = _grid.spacing.y;
+        var spacingX = Mathf.Clamp(width * 0.012f, 8f, 18f);
+        var spacingY = Mathf.Clamp(height * 0.012f, 8f, 18f);
+        _grid.spacing = new Vector2(spacingX, spacingY);
+
         var totalSpacingX = spacingX * (GridCols - 1);
         var totalSpacingY = spacingY * (GridRows - 1);
+        var innerPaddingX = Mathf.Clamp(width * 0.02f, 8f, 26f);
+        var innerPaddingY = Mathf.Clamp(height * 0.02f, 8f, 26f);
 
-        var cellW = Mathf.Floor((width - totalSpacingX) / GridCols);
-        var cellH = Mathf.Floor((height - totalSpacingY) / GridRows);
-        if (cellW < 8f) cellW = 8f;
-        if (cellH < 8f) cellH = 8f;
+        var cellW = Mathf.Floor((width - totalSpacingX - innerPaddingX * 2f) / GridCols);
+        var cellH = Mathf.Floor((height - totalSpacingY - innerPaddingY * 2f) / GridRows);
+        if (cellW < 12f) cellW = 12f;
+        if (cellH < 12f) cellH = 12f;
 
         _grid.cellSize = new Vector2(cellW, cellH);
-        _grid.padding = new RectOffset(0, 0, 0, 0);
+        _grid.padding = new RectOffset(
+            Mathf.RoundToInt(innerPaddingX),
+            Mathf.RoundToInt(innerPaddingX),
+            Mathf.RoundToInt(innerPaddingY),
+            Mathf.RoundToInt(innerPaddingY)
+        );
     }
 
     private static bool IsRestartPressed()
