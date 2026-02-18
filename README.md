@@ -21,4 +21,4 @@ A Next.js App Router game where users play a 4x4 memory match board, connect a S
    - `NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com`
 3. Start app:
    - `npm run dev`
-4. Open browser, connect Phantom, click `RST` to start an onchain round.
+4. Open browser, connect Phantom, choose `ONCHAIN VERIFY` ON/OFF in the start menu, then press `PLAY`.
