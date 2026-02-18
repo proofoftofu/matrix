@@ -1,7 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import * as fs from "fs";
 import * as os from "os";
 import { expect } from "chai";
@@ -22,6 +22,7 @@ import {
   getMempoolAccAddress,
   getMXEAccAddress,
   getMXEPublicKey,
+  getRawCircuitAccAddress,
   RescueCipher,
   uploadCircuit,
   x25519,
@@ -227,8 +228,81 @@ describe("Blockchain", () => {
         commitment: "confirmed",
       }
     );
+
+    await verifyCircuitHashConsistency({
+      provider: provider as anchor.AnchorProvider,
+      compDefPDA,
+      localRawCircuit: rawCircuit,
+      localHashPath: "build/verify_pair.hash",
+    });
   }
 });
+
+async function verifyCircuitHashConsistency(params: {
+  provider: anchor.AnchorProvider;
+  compDefPDA: PublicKey;
+  localRawCircuit: Buffer;
+  localHashPath: string;
+}): Promise<void> {
+  const { provider, compDefPDA, localRawCircuit, localHashPath } = params;
+
+  const localHashFromRaw = createHash("sha256").update(localRawCircuit).digest();
+  const localHashFromFile = Buffer.from(JSON.parse(fs.readFileSync(localHashPath, "utf8")) as number[]);
+  if (!localHashFromRaw.equals(localHashFromFile)) {
+    throw new Error(
+      `[verify] Local hash mismatch: sha256(build/verify_pair.arcis)=${localHashFromRaw.toString("hex")} build/verify_pair.hash=${localHashFromFile.toString("hex")}`
+    );
+  }
+
+  const arciumProgram = getArciumProgram(provider);
+  const compDef = await arciumProgram.account.computationDefinitionAccount.fetch(compDefPDA);
+  const circuitLenRaw = compDef.definition.circuitLen as number | { toNumber?: () => number; toString: () => string };
+  const circuitLen =
+    typeof circuitLenRaw === "number"
+      ? circuitLenRaw
+      : typeof circuitLenRaw.toNumber === "function"
+        ? circuitLenRaw.toNumber()
+        : Number(circuitLenRaw.toString());
+
+  if (!Number.isFinite(circuitLen) || circuitLen <= 0) {
+    throw new Error(`[verify] Invalid on-chain circuitLen: ${String(circuitLenRaw)}`);
+  }
+
+  const chunks: Buffer[] = [];
+  let collectedBytes = 0;
+  for (let rawIndex = 0; collectedBytes < circuitLen; rawIndex += 1) {
+    const rawPda = getRawCircuitAccAddress(compDefPDA, rawIndex);
+    const rawAcc = await provider.connection.getAccountInfo(rawPda, "confirmed");
+    if (!rawAcc) {
+      throw new Error(
+        `[verify] Missing raw circuit account index=${rawIndex} (${rawPda.toBase58()}) before reaching circuitLen=${circuitLen}`
+      );
+    }
+    if (rawAcc.data.length <= 9) {
+      throw new Error(
+        `[verify] Raw circuit account index=${rawIndex} has invalid length ${rawAcc.data.length}`
+      );
+    }
+    const payload = rawAcc.data.subarray(9);
+    chunks.push(Buffer.from(payload));
+    collectedBytes += payload.length;
+  }
+
+  const onchainRaw = Buffer.concat(chunks).subarray(0, circuitLen);
+  const onchainHash = createHash("sha256").update(onchainRaw).digest();
+
+  console.log("[verify] local circuit hash:", localHashFromRaw.toString("hex"));
+  console.log("[verify] onchain circuit hash:", onchainHash.toString("hex"));
+  console.log("[verify] circuit bytes local/onchain:", localRawCircuit.length, onchainRaw.length);
+
+  if (!onchainHash.equals(localHashFromRaw)) {
+    throw new Error(
+      `[verify] On-chain circuit hash mismatch. local=${localHashFromRaw.toString("hex")} onchain=${onchainHash.toString("hex")}`
+    );
+  }
+
+  console.log("[verify] on-chain circuit hash matches local build.");
+}
 
 async function verifyPairAndDecrypt({
   program,

@@ -93,7 +93,7 @@ describe("init verify_pair comp-def", () => {
         true,
         500,
         {
-          skipPreflight: false,
+          skipPreflight: true,
           preflightCommitment: "confirmed",
           commitment: "confirmed",
         }

@@ -3,7 +3,8 @@
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "init:verify-pair-comp-def": "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/init-verify-pair-comp-def.ts\""
+    "init:verify-pair-comp-def": "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/init-verify-pair-comp-def.ts\"",
+    "check:verify-pair-hash": "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"scripts/check-verify-pair-hash.ts\""
   },
   "dependencies": {
     "@arcium-hq/client": "0.8.4",
