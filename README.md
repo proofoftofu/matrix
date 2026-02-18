@@ -1,4 +1,11 @@
 # 🧩 Cipher Memory Match
+
+## Live App
+https://matrix-ebon-seven.vercel.app
+
+## Video
+https://youtu.be/KYu_1GtY1JE
+
 ## On-chain Proof
 
 Verify Pair => Requesting Queue Computation to Arcium
