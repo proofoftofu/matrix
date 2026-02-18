@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "gen:arcium-key": "node scripts/generate-arcium-x25519-key.mjs"
   },
   "dependencies": {
     "@arcium-hq/client": "^0.8.4",
