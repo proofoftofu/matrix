@@ -9,13 +9,11 @@ import {
   GRID_COLS,
   GRID_ROWS,
   PAIR_COUNT,
-  ROUND_SECONDS,
   computeScore,
   createDeck,
   createRoundState,
   resolveTurnWithResult,
   selectCard,
-  tickRound,
   type RoundState,
 } from "@/lib/game/logic";
 import {
@@ -40,7 +38,7 @@ const pairColors = [
 const pairGlyphs = ["A", "B", "C", "D", "E", "F", "G", "H"];
 
 export default function MatrixGame() {
-  const { wallet, resetWallet } = usePhantomWallet();
+  const { wallet } = usePhantomWallet();
   const endpoint = process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
   const connection = useMemo(() => new Connection(endpoint, "confirmed"), [endpoint]);
 
@@ -49,10 +47,12 @@ export default function MatrixGame() {
   const [cursorIndex, setCursorIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState("Local key ready. Start an onchain round.");
+  const [status, setStatus] = useState("Local key generated on this device. Fund it with devnet SOL.");
   const [roundStartMs, setRoundStartMs] = useState<number | null>(null);
+  const [hasStarted, setHasStarted] = useState(false);
 
   const settlingRef = useRef(false);
+  const publicKeyBase58 = wallet?.publicKey.toBase58() ?? null;
 
   const progressLabel = useMemo(
     () => `P ${gameState.pairsFound}/${PAIR_COUNT} | T ${gameState.turnsUsed} | A ${gameState.actions}`,
@@ -62,22 +62,7 @@ export default function MatrixGame() {
   const hudScore = useMemo(() => computeScore(gameState), [gameState]);
 
   useEffect(() => {
-    let raf = 0;
-    let last = performance.now();
-
-    const loop = (now: number) => {
-      const deltaSeconds = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      setGameState((prev) => tickRound(prev, deltaSeconds));
-      raf = requestAnimationFrame(loop);
-    };
-
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  useEffect(() => {
-    if (!session || busy) return;
+    if (!session || busy || !hasStarted) return;
     if (gameState.phase !== GAME_PHASE.PLAYING) return;
     if (gameState.selectedCards.length !== 2) return;
 
@@ -109,37 +94,36 @@ export default function MatrixGame() {
     return () => {
       cancelled = true;
     };
-  }, [busy, gameState.phase, gameState.selectedCards, session]);
+  }, [busy, gameState.phase, gameState.selectedCards, hasStarted, session]);
 
   useEffect(() => {
     if (!session || !roundStartMs) return;
     if (settlingRef.current) return;
-    if (gameState.phase === GAME_PHASE.PLAYING) return;
+    if (gameState.phase !== GAME_PHASE.WON) return;
 
     settlingRef.current = true;
-    const completed = gameState.phase === GAME_PHASE.WON;
-    const solveMs = Math.max(0, Math.round((ROUND_SECONDS - gameState.timeLeft) * 1000));
+    const solveMs = Math.max(0, Date.now() - roundStartMs);
 
     settleRoundOnchain(session, {
       turnsUsed: gameState.turnsUsed,
       pairsFound: gameState.pairsFound,
-      completed,
+      completed: true,
       solveMs,
       pointsDelta: hudScore,
     })
       .then(() => {
-        setStatus(completed ? "ROUND SETTLED ONCHAIN: CLEAR." : "ROUND SETTLED ONCHAIN: TIMEOUT.");
+        setStatus("ROUND SETTLED ONCHAIN: CLEAR.");
       })
       .catch((cause) => {
         const message = cause instanceof Error ? cause.message : "settle_round_score failed";
         setError(message);
         setStatus("SETTLEMENT FAILED.");
       });
-  }, [gameState.pairsFound, gameState.phase, gameState.timeLeft, gameState.turnsUsed, hudScore, roundStartMs, session]);
+  }, [gameState.pairsFound, gameState.phase, gameState.turnsUsed, hudScore, roundStartMs, session]);
 
   const startRound = useCallback(async () => {
     if (!wallet) {
-      setError("Connect Phantom first.");
+      setError("Local wallet not ready.");
       return;
     }
 
@@ -161,6 +145,7 @@ export default function MatrixGame() {
 
       setSession(nextSession);
       setRoundStartMs(Date.now());
+      setHasStarted(true);
       setStatus("ROUND ACTIVE. FLIP TWO CARDS TO VERIFY WITH ARCIUM.");
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "register_round failed";
@@ -193,6 +178,10 @@ export default function MatrixGame() {
         return;
       }
 
+      if (!hasStarted || gameState.phase !== GAME_PHASE.PLAYING) {
+        return;
+      }
+
       if (event.key === "ArrowLeft") {
         moveCursor(-1, 0);
       } else if (event.key === "ArrowRight") {
@@ -209,26 +198,17 @@ export default function MatrixGame() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [flipCursorCard, moveCursor, startRound]);
+  }, [flipCursorCard, gameState.phase, hasStarted, moveCursor, startRound]);
 
   return (
     <main id="app" aria-label="Cipher Memory Match">
       <section className="info" aria-live="polite">
         <header className="topbar">
           <h1>CIPHER MATCH</h1>
-          <div className="topbar-actions">
-            <button className="wallet-btn" type="button" onClick={resetWallet} disabled={busy}>
-              NEW KEY
-            </button>
-            <button id="restart" type="button" onClick={() => void startRound()} disabled={busy}>
-              {busy ? "..." : "RST"}
-            </button>
-          </div>
         </header>
 
         <div id="status">{status}</div>
         <div className="stats-row">
-          <span>{`${gameState.timeLeft.toFixed(1)}s`}</span>
           <span>{`SCORE ${hudScore}`}</span>
           <span id="progress">{progressLabel}</span>
         </div>
@@ -238,35 +218,49 @@ export default function MatrixGame() {
         {error ? <div className="error">{error}</div> : null}
       </section>
 
-      <section id="board" aria-label="4 by 4 memory board">
-        {gameState.deck.map((card, i) => {
-          const isOpen = card.revealed || card.matched;
-          const classes = ["card"];
-          classes.push(isOpen ? "revealed" : "hidden");
-          if (card.matched) classes.push("matched");
-          if (i === cursorIndex) classes.push("cursor");
-
-          return (
-            <button
-              key={card.id}
-              type="button"
-              className={classes.join(" ")}
-              onClick={() => {
-                setCursorIndex(i);
-                setGameState((prev) => (session && !busy ? selectCard(prev, i) : prev));
-              }}
-              disabled={busy || !session || gameState.phase !== GAME_PHASE.PLAYING}
-              style={
-                isOpen
-                  ? { background: pairColors[card.pairId % pairColors.length], color: "#0e1732" }
-                  : undefined
-              }
-            >
-              <span>{isOpen ? pairGlyphs[card.pairId % pairGlyphs.length] : "?"}</span>
+      {!hasStarted ? (
+        <section id="board" aria-label="Round menu" className="menu-board">
+          <div className="menu-screen">
+            <h2>ROUND MENU</h2>
+            <p>Local private key is generated and stored in this browser.</p>
+            <p>Deposit devnet SOL to this public key before pressing PLAY.</p>
+            <code className="deposit-key">{publicKeyBase58 ?? "Preparing local key..."}</code>
+            <button id="menu-play" type="button" onClick={() => void startRound()} disabled={busy}>
+              {busy ? "STARTING..." : "PLAY"}
             </button>
-          );
-        })}
-      </section>
+          </div>
+        </section>
+      ) : (
+        <section id="board" aria-label="4 by 4 memory board">
+          {gameState.deck.map((card, i) => {
+            const isOpen = card.revealed || card.matched;
+            const classes = ["card"];
+            classes.push(isOpen ? "revealed" : "hidden");
+            if (card.matched) classes.push("matched");
+            if (i === cursorIndex) classes.push("cursor");
+
+            return (
+              <button
+                key={card.id}
+                type="button"
+                className={classes.join(" ")}
+                onClick={() => {
+                  setCursorIndex(i);
+                  setGameState((prev) => (session && !busy ? selectCard(prev, i) : prev));
+                }}
+                disabled={busy || !session || gameState.phase !== GAME_PHASE.PLAYING}
+                style={
+                  isOpen
+                    ? { background: pairColors[card.pairId % pairColors.length], color: "#0e1732" }
+                    : undefined
+                }
+              >
+                <span>{isOpen ? pairGlyphs[card.pairId % pairGlyphs.length] : "?"}</span>
+              </button>
+            );
+          })}
+        </section>
+      )}
     </main>
   );
 }

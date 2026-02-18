@@ -29,9 +29,21 @@ type Body = {
   programId?: string;
   deckPairIds?: number[];
   computationOffset?: string;
+  verifySignature?: string;
+  timeoutMs?: number;
   sharedSecretB64?: string;
   isMatchCipher?: number[];
   nonce?: number[];
+};
+
+type DeriveVerifyAccountsResponse = {
+  computationAccount: string;
+  clusterAccount: string;
+  mxeAccount: string;
+  mempoolAccount: string;
+  executingPool: string;
+  compDefAccount: string;
+  compDefExists: boolean;
 };
 
 function debug(message: string, data?: Record<string, unknown>): void {
@@ -113,6 +125,67 @@ function getProvider(): anchor.AnchorProvider {
   };
 
   return new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function getSignatureStatusLowLevel(
+  connection: anchor.web3.Connection,
+  signature: string,
+  timeoutMs: number
+): Promise<{
+  confirmed: boolean;
+  finalized: boolean;
+  error: string | null;
+}> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const statuses = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const status = statuses.value[0];
+    if (status?.err) {
+      return {
+        confirmed: false,
+        finalized: false,
+        error: JSON.stringify(status.err),
+      };
+    }
+    if (
+      status?.confirmationStatus === "confirmed" ||
+      status?.confirmationStatus === "finalized"
+    ) {
+      return {
+        confirmed: true,
+        finalized: status.confirmationStatus === "finalized",
+        error: null,
+      };
+    }
+    await sleep(1_200);
+  }
+  return {
+    confirmed: false,
+    finalized: false,
+    error: "signature status timeout",
+  };
 }
 
 async function getMXEPublicKeyWithRetry(
@@ -212,16 +285,20 @@ export async function POST(request: Request) {
           arciumClusterOffset,
         });
 
-        const accounts = {
+        const provider = getProvider();
+        const compDefAccount = getCompDefAccAddress(
+          programId,
+          Buffer.from(getCompDefAccOffset("verify_pair")).readUInt32LE()
+        );
+        const compDefInfo = await provider.connection.getAccountInfo(compDefAccount, "confirmed");
+        const accounts: DeriveVerifyAccountsResponse = {
           computationAccount: getComputationAccAddress(arciumClusterOffset, computationOffset).toBase58(),
           clusterAccount: getClusterAccAddress(arciumClusterOffset).toBase58(),
           mxeAccount: getMXEAccAddress(programId).toBase58(),
           mempoolAccount: getMempoolAccAddress(arciumClusterOffset).toBase58(),
           executingPool: getExecutingPoolAccAddress(arciumClusterOffset).toBase58(),
-          compDefAccount: getCompDefAccAddress(
-            programId,
-            Buffer.from(getCompDefAccOffset("verify_pair")).readUInt32LE()
-          ).toBase58(),
+          compDefAccount: compDefAccount.toBase58(),
+          compDefExists: Boolean(compDefInfo),
         };
         debug("deriveVerifyAccounts result", accounts);
         return NextResponse.json(accounts);
@@ -233,20 +310,65 @@ export async function POST(request: Request) {
         }
 
         const provider = getProvider();
+        const timeoutMs =
+          typeof body.timeoutMs === "number" && Number.isFinite(body.timeoutMs)
+            ? Math.max(1_000, Math.floor(body.timeoutMs))
+            : 45_000;
         debug("awaitFinalization start", {
           endpoint: provider.connection.rpcEndpoint,
           programId: body.programId,
           computationOffset: body.computationOffset,
+          verifySignature: body.verifySignature ?? null,
+          timeoutMs,
         });
-        await awaitComputationFinalization(
-          provider,
-          new anchor.BN(body.computationOffset),
-          new PublicKey(body.programId),
-          "confirmed"
-        );
-        debug("awaitFinalization completed");
 
-        return NextResponse.json({ ok: true });
+        let signatureStatus: {
+          confirmed: boolean;
+          finalized: boolean;
+          error: string | null;
+        } | null = null;
+        if (body.verifySignature) {
+          signatureStatus = await getSignatureStatusLowLevel(
+            provider.connection,
+            body.verifySignature,
+            timeoutMs
+          );
+          debug("awaitFinalization tx status", {
+            verifySignature: body.verifySignature,
+            ...signatureStatus,
+          });
+        }
+        try {
+          await withTimeout(
+            awaitComputationFinalization(
+              provider,
+              new anchor.BN(body.computationOffset),
+              new PublicKey(body.programId),
+              "confirmed"
+            ),
+            timeoutMs,
+            `Computation finalization timed out after ${timeoutMs}ms`
+          );
+          debug("awaitFinalization completed");
+          return NextResponse.json({
+            ok: true,
+            timedOut: false,
+            tx: signatureStatus,
+          });
+        } catch (cause) {
+          const message =
+            cause instanceof Error ? cause.message : "awaitFinalization timed out";
+          debug("awaitFinalization best-effort timeout", {
+            computationOffset: body.computationOffset,
+            timeoutMs,
+            error: message,
+          });
+          return NextResponse.json({
+            ok: true,
+            timedOut: true,
+            tx: signatureStatus,
+          });
+        }
       }
 
       case "decryptPairResult": {

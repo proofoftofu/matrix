@@ -18,6 +18,7 @@ type DeriveAccountsResponse = {
   mempoolAccount: string;
   executingPool: string;
   compDefAccount: string;
+  compDefExists: boolean;
 };
 
 type PrepareRoundResponse = {
@@ -116,6 +117,54 @@ async function postArcium<T>(body: Record<string, unknown>): Promise<T> {
   return json;
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForSignatureConfirmedLowLevel(
+  connection: anchor.web3.Connection,
+  signature: string,
+  timeoutMs = 45_000
+): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const statuses = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const status = statuses.value[0];
+
+    if (status?.err) {
+      throw new Error(`verifyPair transaction failed: ${JSON.stringify(status.err)}`);
+    }
+    if (
+      status?.confirmationStatus === "confirmed" ||
+      status?.confirmationStatus === "finalized"
+    ) {
+      return;
+    }
+
+    await sleep(1_200);
+  }
+
+  throw new Error(`Timed out waiting tx confirmation for ${signature}`);
+}
+
 export async function registerRoundOnchain(params: {
   wallet: WalletLike;
   connection: anchor.web3.Connection;
@@ -212,6 +261,11 @@ export async function verifyPairOnchain(
     computationOffset: computationOffset.toString(),
   });
   debug("deriveVerifyAccounts response", accountMeta);
+  if (!accountMeta.compDefExists) {
+    throw new Error(
+      "verify_pair computation definition is missing on-chain. Run prototypes/blockchain init_verify_pair_comp_def + upload verify_pair circuit for this program ID."
+    );
+  }
 
   const verifySig = await session.program.methods
     .verifyPair(
@@ -234,18 +288,57 @@ export async function verifyPairOnchain(
     .rpc({ skipPreflight: true, commitment: "confirmed" });
   debug("verifyPair tx submitted", { signature: verifySig });
 
-  await postArcium({
+  await waitForSignatureConfirmedLowLevel(session.provider.connection, verifySig);
+  debug("verifyPair tx confirmed", { signature: verifySig });
+
+  const finalizationPromise = postArcium({
     action: "awaitFinalization",
     programId: session.program.programId.toBase58(),
     computationOffset: computationOffset.toString(),
-  });
-  debug("awaitFinalization done", { computationOffset: computationOffset.toString() });
+    verifySignature: verifySig,
+  })
+    .then(() => {
+      debug("awaitFinalization done", { computationOffset: computationOffset.toString() });
+      return true;
+    })
+    .catch((cause) => {
+      const message = cause instanceof Error ? cause.message : "awaitFinalization failed";
+      debug("awaitFinalization warning", {
+        computationOffset: computationOffset.toString(),
+        error: message,
+      });
+      return false;
+    });
 
-  const pairEvent = await pairEventPromise;
+  let pairEvent: PairVerifiedEvent;
+  try {
+    pairEvent = await withTimeout(
+      pairEventPromise,
+      45_000,
+      "Timed out waiting for pair verification event"
+    );
+  } catch (cause) {
+    debug("pairVerified listener timed out; scanning recent confirmed logs", {
+      roundState: session.roundState.toBase58(),
+      roundId: session.roundId.toString(),
+      computationAccount: accountMeta.computationAccount,
+    });
+    const recoveredEvent = await findPairVerifiedEventFromRecentLogs(
+      session,
+      new PublicKey(accountMeta.computationAccount),
+      45_000
+    );
+    if (!recoveredEvent) {
+      throw cause;
+    }
+    pairEvent = recoveredEvent;
+  }
   debug("pairVerified event received", {
     isMatchCipherLen: Array.from(pairEvent.isMatchCipher).length,
     nonceLen: Array.from(pairEvent.nonce).length,
   });
+  await finalizationPromise;
+
   const payload = await postArcium<{ isMatch: boolean }>({
     action: "decryptPairResult",
     sharedSecretB64: session.sharedSecretB64,
@@ -301,6 +394,66 @@ type PairVerifiedEvent = {
   isMatchCipher: ArrayLike<number>;
   nonce: ArrayLike<number>;
 };
+
+async function findPairVerifiedEventFromRecentLogs(
+  session: RoundSession,
+  computationAccount: PublicKey,
+  timeoutMs: number
+): Promise<PairVerifiedEvent | null> {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const [roundStateSignatures, computationSignatures] = await Promise.all([
+      session.provider.connection.getSignaturesForAddress(
+        session.roundState,
+        { limit: 30 },
+        "finalized"
+      ),
+      session.provider.connection.getSignaturesForAddress(
+        computationAccount,
+        { limit: 30 },
+        "finalized"
+      ),
+    ]);
+    const seen = new Set<string>();
+    const signatures = [...roundStateSignatures, ...computationSignatures].filter((sig) => {
+      if (seen.has(sig.signature)) return false;
+      seen.add(sig.signature);
+      return true;
+    });
+
+    for (const signatureInfo of signatures) {
+      const tx = await session.provider.connection.getTransaction(signatureInfo.signature, {
+        commitment: "finalized",
+        maxSupportedTransactionVersion: 0,
+      });
+      const logs = tx?.meta?.logMessages;
+      if (!logs || logs.length === 0) continue;
+
+      const parsedEvents = session.program.coder.events.parseLogs(logs);
+      for (const parsedEvent of parsedEvents) {
+        if (parsedEvent.name !== "pairVerified") continue;
+        const payload = parsedEvent.data as {
+          roundId?: anchor.BN | { toString: () => string };
+          isMatchCipher?: ArrayLike<number>;
+          nonce?: ArrayLike<number>;
+        };
+
+        if (!payload.roundId || !payload.isMatchCipher || !payload.nonce) continue;
+        if (payload.roundId.toString() !== session.roundId.toString()) continue;
+
+        return {
+          isMatchCipher: payload.isMatchCipher,
+          nonce: payload.nonce,
+        };
+      }
+    }
+
+    await sleep(1_500);
+  }
+
+  return null;
+}
 
 async function awaitPairVerifiedEvent(program: Program): Promise<PairVerifiedEvent> {
   let listenerId = -1;

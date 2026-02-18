@@ -2,12 +2,10 @@ export const GRID_COLS = 4;
 export const GRID_ROWS = 4;
 export const CARD_COUNT = GRID_COLS * GRID_ROWS;
 export const PAIR_COUNT = CARD_COUNT / 2;
-export const ROUND_SECONDS = 90;
 
 export const GAME_PHASE = Object.freeze({
   PLAYING: "playing",
   WON: "won",
-  TIMEOUT: "timeout",
 });
 
 export type GamePhase = (typeof GAME_PHASE)[keyof typeof GAME_PHASE];
@@ -21,8 +19,6 @@ export type Card = {
 
 export type RoundState = {
   deck: Card[];
-  roundSeconds: number;
-  timeLeft: number;
   phase: GamePhase;
   selectedCards: number[];
   turnsUsed: number;
@@ -54,15 +50,11 @@ export function createDeck(rng: () => number = Math.random): Card[] {
 
 export function createRoundState({
   deck = createDeck(),
-  roundSeconds = ROUND_SECONDS,
 }: {
   deck?: Card[];
-  roundSeconds?: number;
 } = {}): RoundState {
   return {
     deck,
-    roundSeconds,
-    timeLeft: roundSeconds,
     phase: GAME_PHASE.PLAYING,
     selectedCards: [],
     turnsUsed: 0,
@@ -136,18 +128,10 @@ export function resolveTurnWithResult(state: RoundState, isMatch: boolean): Roun
   return completeRound(nextState);
 }
 
-export function tickRound(state: RoundState, deltaSeconds: number): RoundState {
-  if (state.phase !== GAME_PHASE.PLAYING) return state;
-  const timeLeft = Math.max(0, state.timeLeft - deltaSeconds);
-  const phase = timeLeft <= 0 ? GAME_PHASE.TIMEOUT : state.phase;
-  return { ...state, timeLeft, phase };
-}
-
 export function computeScore(state: RoundState): number {
   const turnPenalty = state.turnsUsed * 26;
   const actionPenalty = state.actions * 8;
-  const timeBonus = Math.floor(state.timeLeft * 7);
   const pairBonus = state.pairsFound * 80;
   const clearBonus = state.phase === GAME_PHASE.WON ? 1800 : 0;
-  return Math.max(0, clearBonus + pairBonus + timeBonus - turnPenalty - actionPenalty);
+  return Math.max(0, clearBonus + pairBonus - turnPenalty - actionPenalty);
 }

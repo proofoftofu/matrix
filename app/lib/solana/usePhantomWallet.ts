@@ -43,27 +43,36 @@ function loadOrCreateKeypair(): Keypair {
 }
 
 function toWalletLike(keypair: Keypair): WalletLike {
+  const signWithKeypair = (tx: unknown): void => {
+    const maybePartial = tx as { partialSign?: (signer: Keypair) => void };
+    if (typeof maybePartial.partialSign === "function") {
+      maybePartial.partialSign(keypair);
+      return;
+    }
+
+    const maybeSign = tx as { sign?: (...args: unknown[]) => void };
+    if (typeof maybeSign.sign !== "function") {
+      return;
+    }
+
+    try {
+      maybeSign.sign(keypair);
+    } catch {
+      maybeSign.sign([keypair]);
+    }
+  };
+
   return {
     publicKey: keypair.publicKey,
     signTransaction: async <T>(tx: T): Promise<T> => {
       debug("signTransaction called");
-      const anyTx = tx as { sign?: (s: Keypair[]) => void; partialSign?: (s: Keypair) => void };
-      if (typeof anyTx.sign === "function") {
-        anyTx.sign([keypair]);
-      } else if (typeof anyTx.partialSign === "function") {
-        anyTx.partialSign(keypair);
-      }
+      signWithKeypair(tx);
       return tx;
     },
     signAllTransactions: async <T>(txs: T[]): Promise<T[]> => {
       debug("signAllTransactions called", { txCount: txs.length });
       for (const tx of txs) {
-        const anyTx = tx as { sign?: (s: Keypair[]) => void; partialSign?: (s: Keypair) => void };
-        if (typeof anyTx.sign === "function") {
-          anyTx.sign([keypair]);
-        } else if (typeof anyTx.partialSign === "function") {
-          anyTx.partialSign(keypair);
-        }
+        signWithKeypair(tx);
       }
       return txs;
     },
