@@ -1,4 +1,8 @@
-# 🧩 Cipher Memory Match (Matrix)
+# 🧩 Cipher Memory Match
+## On-chain Proof
+
+Verify Pair => Requesting Queue Computation to Arcium
+https://explorer.solana.com/tx/3VKiPWKjntKYrpLTt63cmY46g5uAeUeuPAAWjXwfbC6Dt6fVGdvoyfpTyunoUBh4mA3UegxsCZrkQkvCXgtKRZgs?cluster=devnet
 
 ## 🔐 Description
 

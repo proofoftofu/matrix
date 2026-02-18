@@ -483,8 +483,9 @@ async function findPairVerifiedEventFromRecentLogs(
       const logs = tx?.meta?.logMessages;
       if (!logs || logs.length === 0) continue;
 
-      const parsedEvents = session.program.coder.events.parseLogs(logs);
-      for (const parsedEvent of parsedEvents) {
+      for (const log of logs) {
+        const parsedEvent = session.program.coder.events.decode(log);
+        if (!parsedEvent) continue;
         if (parsedEvent.name !== "pairVerified") continue;
         const payload = parsedEvent.data as {
           roundId?: anchor.BN | { toString: () => string };
