@@ -17,9 +17,9 @@ import {
   type RoundState,
 } from "@/lib/game/logic";
 import {
+  queueVerifyPairOnchain,
   registerRoundOnchain,
   settleRoundOnchain,
-  verifyPairOnchain,
   type RoundSession,
 } from "@/lib/chain/client";
 import { usePhantomWallet } from "@/lib/solana/usePhantomWallet";
@@ -40,6 +40,7 @@ const pairGlyphs = ["A", "B", "C", "D", "E", "F", "G", "H"];
 export default function MatrixGame() {
   const { wallet } = usePhantomWallet();
   const endpoint = process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
+  const txVerifyEnabled = process.env.NEXT_PUBLIC_VERIFY_TX_ENABLED !== "0";
   const connection = useMemo(() => new Connection(endpoint, "confirmed"), [endpoint]);
 
   const [gameState, setGameState] = useState<RoundState>(() => createRoundState({ deck: createDeck() }));
@@ -68,25 +69,35 @@ export default function MatrixGame() {
 
     let cancelled = false;
     const [cardA, cardB] = gameState.selectedCards;
+    const isMatchLocal = gameState.deck[cardA]?.pairId === gameState.deck[cardB]?.pairId;
 
     const run = async () => {
       try {
-        setBusy(true);
-        setStatus("CHECKING PAIR ONCHAIN...");
-        const isMatch = await verifyPairOnchain(session, cardA, cardB);
-        if (cancelled) return;
+        if (txVerifyEnabled) {
+          setStatus("SENDING VERIFY TX ONCHAIN...");
+          void queueVerifyPairOnchain(session, cardA, cardB)
+            .then((signature) => {
+              if (cancelled) return;
+              setStatus(`VERIFY TX CONFIRMED: ${signature.slice(0, 8)}...`);
+            })
+            .catch((cause) => {
+              if (cancelled) return;
+              const message = cause instanceof Error ? cause.message : "verify_pair tx failed";
+              setError(message);
+              setStatus("VERIFY TX FAILED.");
+            });
+        } else {
+          setStatus("VERIFY TX DISABLED (ENV).");
+        }
 
-        setGameState((prev) => resolveTurnWithResult(prev, isMatch));
-        setStatus(isMatch ? "MATCH CONFIRMED ONCHAIN." : "NO MATCH. TRY AGAIN.");
+        if (cancelled) return;
+        setGameState((prev) => resolveTurnWithResult(prev, isMatchLocal));
+        setStatus(isMatchLocal ? "MATCH (FRONTEND CHECK)." : "NO MATCH. TRY AGAIN.");
       } catch (cause) {
         if (cancelled) return;
-        const message = cause instanceof Error ? cause.message : "verify_pair failed";
+        const message = cause instanceof Error ? cause.message : "local pair check failed";
         setError(message);
-        setStatus("ONCHAIN VERIFY FAILED.");
-      } finally {
-        if (!cancelled) {
-          setBusy(false);
-        }
+        setStatus("PAIR CHECK FAILED.");
       }
     };
 
@@ -94,7 +105,7 @@ export default function MatrixGame() {
     return () => {
       cancelled = true;
     };
-  }, [busy, gameState.phase, gameState.selectedCards, hasStarted, session]);
+  }, [busy, gameState.deck, gameState.phase, gameState.selectedCards, hasStarted, session, txVerifyEnabled]);
 
   useEffect(() => {
     if (!session || !roundStartMs) return;

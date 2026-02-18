@@ -350,6 +350,59 @@ export async function verifyPairOnchain(
   return payload.isMatch;
 }
 
+export async function queueVerifyPairOnchain(
+  session: RoundSession,
+  cardAIndex: number,
+  cardBIndex: number
+): Promise<string> {
+  debug("queueVerifyPair start", {
+    roundId: session.roundId.toString(),
+    roundState: session.roundState.toBase58(),
+    cardAIndex,
+    cardBIndex,
+  });
+  const computationOffset = randomU64BN();
+  const turnNonce = randomBytes(16);
+
+  const accountMeta = await postArcium<DeriveAccountsResponse>({
+    action: "deriveVerifyAccounts",
+    programId: session.program.programId.toBase58(),
+    computationOffset: computationOffset.toString(),
+  });
+  if (!accountMeta.compDefExists) {
+    throw new Error(
+      "verify_pair computation definition is missing on-chain. Run prototypes/blockchain init_verify_pair_comp_def + upload verify_pair circuit for this program ID."
+    );
+  }
+
+  const verifySig = await session.program.methods
+    .verifyPair(
+      session.roundId,
+      cardAIndex,
+      cardBIndex,
+      computationOffset,
+      deserializeLEToBN(turnNonce)
+    )
+    .accountsPartial({
+      payer: session.provider.wallet.publicKey,
+      roundState: session.roundState,
+      computationAccount: new PublicKey(accountMeta.computationAccount),
+      clusterAccount: new PublicKey(accountMeta.clusterAccount),
+      mxeAccount: new PublicKey(accountMeta.mxeAccount),
+      mempoolAccount: new PublicKey(accountMeta.mempoolAccount),
+      executingPool: new PublicKey(accountMeta.executingPool),
+      compDefAccount: new PublicKey(accountMeta.compDefAccount),
+    })
+    .rpc({ skipPreflight: true, commitment: "confirmed" });
+
+  await waitForSignatureConfirmedLowLevel(session.provider.connection, verifySig);
+  debug("queueVerifyPair tx confirmed", {
+    signature: verifySig,
+    computationOffset: computationOffset.toString(),
+  });
+  return verifySig;
+}
+
 export async function settleRoundOnchain(
   session: RoundSession,
   params: {
