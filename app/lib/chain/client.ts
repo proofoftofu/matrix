@@ -1,12 +1,12 @@
 import * as anchor from "@coral-xyz/anchor/dist/browser/index.js";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
-import type { AnchorWallet } from "@solana/wallet-adapter-react";
 import { Buffer } from "buffer";
 
 import blockchainIdl from "@/lib/idl/blockchain.json";
 import { CARD_COUNT, type Card } from "@/lib/game/logic";
 
 const ROUND_STATE_SEED = "round_state";
+const LOG_PREFIX = "[arcium-client]";
 
 type Program = anchor.Program;
 type Provider = anchor.AnchorProvider;
@@ -28,12 +28,26 @@ type PrepareRoundResponse = {
   encryptedBoardSlotB: number[][];
 };
 
+function debug(message: string, data?: Record<string, unknown>): void {
+  if (data) {
+    console.log(`${LOG_PREFIX} ${message}`, data);
+    return;
+  }
+  console.log(`${LOG_PREFIX} ${message}`);
+}
+
 export type RoundSession = {
   program: Program;
   provider: Provider;
   roundId: anchor.BN;
   roundState: PublicKey;
   sharedSecretB64: string;
+};
+
+export type WalletLike = {
+  publicKey: PublicKey;
+  signTransaction: <T>(tx: T) => Promise<T>;
+  signAllTransactions: <T>(txs: T[]) => Promise<T[]>;
 };
 
 function randomBytes(length: number): Uint8Array {
@@ -57,7 +71,7 @@ function getRoundStatePda(
   )[0];
 }
 
-function createProgram(wallet: AnchorWallet, connection: anchor.web3.Connection): {
+function createProgram(wallet: WalletLike, connection: anchor.web3.Connection): {
   provider: Provider;
   program: Program;
 } {
@@ -70,6 +84,10 @@ function createProgram(wallet: AnchorWallet, connection: anchor.web3.Connection)
 }
 
 async function postArcium<T>(body: Record<string, unknown>): Promise<T> {
+  const action =
+    typeof body.action === "string" ? body.action : "unknown";
+  const startedAt = performance.now();
+  debug("api request", { action, body });
   const response = await fetch("/api/arcium", {
     method: "POST",
     headers: {
@@ -80,33 +98,63 @@ async function postArcium<T>(body: Record<string, unknown>): Promise<T> {
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { error?: string };
+    debug("api request failed", {
+      action,
+      status: response.status,
+      elapsedMs: Number((performance.now() - startedAt).toFixed(1)),
+      error: payload.error ?? "unknown",
+    });
     throw new Error(payload.error ?? `API request failed (${response.status})`);
   }
 
-  return (await response.json()) as T;
+  const json = (await response.json()) as T;
+  debug("api request success", {
+    action,
+    status: response.status,
+    elapsedMs: Number((performance.now() - startedAt).toFixed(1)),
+  });
+  return json;
 }
 
 export async function registerRoundOnchain(params: {
-  wallet: AnchorWallet;
+  wallet: WalletLike;
   connection: anchor.web3.Connection;
   deck: Card[];
 }): Promise<RoundSession> {
   const { wallet, connection, deck } = params;
+  debug("registerRound start", {
+    wallet: wallet.publicKey.toBase58(),
+    deckSize: deck.length,
+  });
   if (deck.length !== CARD_COUNT) {
     throw new Error(`Deck must contain exactly ${CARD_COUNT} cards`);
   }
 
   const { provider, program } = createProgram(wallet, connection);
+  debug("program ready", {
+    programId: program.programId.toBase58(),
+    endpoint: connection.rpcEndpoint,
+  });
   const roundCrypto = await postArcium<PrepareRoundResponse>({
     action: "prepareRound",
     programId: program.programId.toBase58(),
     deckPairIds: deck.map((card) => card.pairId),
   });
+  debug("prepareRound response", {
+    boardNonceLen: roundCrypto.boardNonce.length,
+    publicKeyLen: roundCrypto.publicKey.length,
+    slotALen: roundCrypto.encryptedBoardSlotA.length,
+    slotBLen: roundCrypto.encryptedBoardSlotB.length,
+  });
 
   const roundId = randomU64BN();
   const roundState = getRoundStatePda(program.programId, wallet.publicKey, roundId);
+  debug("round ids generated", {
+    roundId: roundId.toString(),
+    roundState: roundState.toBase58(),
+  });
 
-  await program.methods
+  const registerSig = await program.methods
     .registerRound(
       roundId,
       roundCrypto.encryptedBoardSlotA,
@@ -119,14 +167,16 @@ export async function registerRoundOnchain(params: {
       systemProgram: SystemProgram.programId,
     })
     .rpc({ commitment: "confirmed" });
+  debug("registerRound tx confirmed", { signature: registerSig });
 
-  await program.methods
+  const setSlotBSig = await program.methods
     .setRoundSlotB(roundId, roundCrypto.encryptedBoardSlotB)
     .accounts({
       payer: wallet.publicKey,
       roundState,
     })
     .rpc({ commitment: "confirmed" });
+  debug("setRoundSlotB tx confirmed", { signature: setSlotBSig });
 
   return {
     program,
@@ -142,17 +192,28 @@ export async function verifyPairOnchain(
   cardAIndex: number,
   cardBIndex: number
 ): Promise<boolean> {
+  debug("verifyPair start", {
+    roundId: session.roundId.toString(),
+    roundState: session.roundState.toBase58(),
+    cardAIndex,
+    cardBIndex,
+  });
   const pairEventPromise = awaitPairVerifiedEvent(session.program);
   const computationOffset = randomU64BN();
   const turnNonce = randomBytes(16);
+  debug("verifyPair computed offsets", {
+    computationOffset: computationOffset.toString(),
+    turnNonceLen: turnNonce.length,
+  });
 
   const accountMeta = await postArcium<DeriveAccountsResponse>({
     action: "deriveVerifyAccounts",
     programId: session.program.programId.toBase58(),
     computationOffset: computationOffset.toString(),
   });
+  debug("deriveVerifyAccounts response", accountMeta);
 
-  await session.program.methods
+  const verifySig = await session.program.methods
     .verifyPair(
       session.roundId,
       cardAIndex,
@@ -171,20 +232,27 @@ export async function verifyPairOnchain(
       compDefAccount: new PublicKey(accountMeta.compDefAccount),
     })
     .rpc({ skipPreflight: true, commitment: "confirmed" });
+  debug("verifyPair tx submitted", { signature: verifySig });
 
   await postArcium({
     action: "awaitFinalization",
     programId: session.program.programId.toBase58(),
     computationOffset: computationOffset.toString(),
   });
+  debug("awaitFinalization done", { computationOffset: computationOffset.toString() });
 
   const pairEvent = await pairEventPromise;
+  debug("pairVerified event received", {
+    isMatchCipherLen: Array.from(pairEvent.isMatchCipher).length,
+    nonceLen: Array.from(pairEvent.nonce).length,
+  });
   const payload = await postArcium<{ isMatch: boolean }>({
     action: "decryptPairResult",
     sharedSecretB64: session.sharedSecretB64,
     isMatchCipher: Array.from(pairEvent.isMatchCipher),
     nonce: Array.from(pairEvent.nonce),
   });
+  debug("decryptPairResult response", payload);
 
   return payload.isMatch;
 }
@@ -200,8 +268,18 @@ export async function settleRoundOnchain(
   }
 ): Promise<void> {
   const nonceHash = randomBytes(32);
+  debug("settleRound start", {
+    roundId: session.roundId.toString(),
+    roundState: session.roundState.toBase58(),
+    turnsUsed: params.turnsUsed,
+    pairsFound: params.pairsFound,
+    completed: params.completed,
+    solveMs: params.solveMs,
+    pointsDelta: params.pointsDelta,
+    nonceHashLen: nonceHash.length,
+  });
 
-  await session.program.methods
+  const settleSig = await session.program.methods
     .settleRoundScore(
       session.roundId,
       params.turnsUsed,
@@ -216,6 +294,7 @@ export async function settleRoundOnchain(
       roundState: session.roundState,
     })
     .rpc({ commitment: "confirmed" });
+  debug("settleRoundScore tx confirmed", { signature: settleSig });
 }
 
 type PairVerifiedEvent = {
@@ -226,15 +305,18 @@ type PairVerifiedEvent = {
 async function awaitPairVerifiedEvent(program: Program): Promise<PairVerifiedEvent> {
   let listenerId = -1;
   try {
+    debug("listening for pairVerified event");
     const payload = await new Promise<PairVerifiedEvent>((resolve) => {
       listenerId = program.addEventListener("pairVerified", (event) => {
         resolve(event as PairVerifiedEvent);
       });
     });
+    debug("pairVerified event listener resolved");
     return payload;
   } finally {
     if (listenerId >= 0) {
       await program.removeEventListener(listenerId);
+      debug("pairVerified event listener removed", { listenerId });
     }
   }
 }

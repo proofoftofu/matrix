@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { useAnchorWallet, useConnection } from "@solana/wallet-adapter-react";
+import { Connection } from "@solana/web3.js";
 
 import {
   CARD_COUNT,
@@ -25,6 +24,7 @@ import {
   verifyPairOnchain,
   type RoundSession,
 } from "@/lib/chain/client";
+import { usePhantomWallet } from "@/lib/solana/usePhantomWallet";
 
 const pairColors = [
   "#ff7aa2",
@@ -40,15 +40,16 @@ const pairColors = [
 const pairGlyphs = ["A", "B", "C", "D", "E", "F", "G", "H"];
 
 export default function MatrixGame() {
-  const { connection } = useConnection();
-  const wallet = useAnchorWallet();
+  const { wallet, resetWallet } = usePhantomWallet();
+  const endpoint = process.env.NEXT_PUBLIC_SOLANA_RPC_URL ?? "https://api.devnet.solana.com";
+  const connection = useMemo(() => new Connection(endpoint, "confirmed"), [endpoint]);
 
   const [gameState, setGameState] = useState<RoundState>(() => createRoundState({ deck: createDeck() }));
   const [session, setSession] = useState<RoundSession | null>(null);
   const [cursorIndex, setCursorIndex] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState("Connect wallet and start an onchain round.");
+  const [status, setStatus] = useState("Local key ready. Start an onchain round.");
   const [roundStartMs, setRoundStartMs] = useState<number | null>(null);
 
   const settlingRef = useRef(false);
@@ -216,7 +217,9 @@ export default function MatrixGame() {
         <header className="topbar">
           <h1>CIPHER MATCH</h1>
           <div className="topbar-actions">
-            <WalletMultiButton />
+            <button className="wallet-btn" type="button" onClick={resetWallet} disabled={busy}>
+              NEW KEY
+            </button>
             <button id="restart" type="button" onClick={() => void startRound()} disabled={busy}>
               {busy ? "..." : "RST"}
             </button>

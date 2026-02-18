@@ -112,6 +112,21 @@ body {
   cursor: default;
 }
 
+.wallet-btn {
+  border: 2px solid var(--ink);
+  background: #223665;
+  color: var(--ink);
+  font: inherit;
+  font-size: clamp(0.54rem, 1.6vmin, 0.72rem);
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.wallet-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 #status {
   min-height: 1em;
   color: var(--accent);
